@@ -27,23 +27,23 @@ class Stream
     protected $id;
 
     protected $state;
-    
+
     protected $defer;
-    
+
     protected $buffer;
-    
+
     protected $channel;
-    
+
     protected $receiveWindow;
-    
+
     protected $receiveChannel;
-    
+
     protected $receiveReady;
-    
+
     protected $sendWindow;
-    
+
     protected $sendChannel;
-    
+
     protected $sendReady;
 
     public function __construct(int $id, ConnectionState $state)
@@ -51,16 +51,16 @@ class Stream
         $this->id = $id;
         $this->state = $state;
 
-        $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];        
+        $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
         $this->sendWindow = $state->remoteSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
-        
+
         $this->receiveChannel = new Channel();
         $this->receiveReady = $this->receiveChannel->getIterator();
-        
+
         $this->sendChannel = new Channel();
         $this->sendReady = $this->sendChannel->getIterator();
     }
-    
+
     public function __debugInfo(): array
     {
         return [
@@ -86,7 +86,7 @@ class Stream
                 $channel->close($e);
             }
         }
-        
+
         $this->receiveChannel->close($e ?? new StreamClosedException('Stream has been closed'));
         $this->sendChannel->close($e ?? new StreamClosedException('Stream has been closed'));
     }
@@ -105,7 +105,7 @@ class Stream
 
                 if ($frame->flags & Frame::END_HEADERS) {
                     if (!($frame->flags & Frame::END_STREAM)) {
-                        $this->channel = new Channel(\PHP_INT_MAX);
+                        $this->channel = new Channel(64);
                     }
 
                     try {
@@ -136,11 +136,11 @@ class Stream
                 if ($this->receiveWindow < 0) {
                     $this->receiveReady->next();
                 }
-                
+
                 if ($this->state->receiveWindow < 0) {
                     $this->state->receiveReady->next();
                 }
-                
+
                 try {
                     if ($data !== '') {
                         $this->channel->send($data);
@@ -148,10 +148,10 @@ class Stream
                 } finally {
                     if ($frame->flags & Frame::END_STREAM) {
                         $this->channel->close();
-                        
+
                         $this->close();
                     }
-                }                
+                }
                 break;
             case Frame::WINDOW_UPDATE:
                 $this->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
@@ -171,13 +171,13 @@ class Stream
             $frame,
             new Frame(Frame::WINDOW_UPDATE, $this->id, $frame->data)
         ]);
-        
+
         $this->state->receiveWindow += $size;
 
         while ($this->state->receiveWindow > 0 && $this->state->receiveChannel->isReadyForSend()) {
             $this->state->receiveChannel->send(null);
         }
-        
+
         $this->receiveWindow += $size;
 
         while ($this->receiveWindow > 0 && $this->receiveChannel->isReadyForSend()) {
@@ -298,7 +298,7 @@ class Stream
 
                         continue;
                     }
-                    
+
                     $this->sendWindow -= $available;
                     $this->state->sendWindow -= $available;
 
@@ -312,7 +312,7 @@ class Stream
 
                     $len -= $available;
                 }
-                
+
                 $sent += $len;
             }
 

@@ -53,7 +53,7 @@ class Connection
 
     protected function __construct(SocketStream $socket, HPack $hpack, array $settings, ?Deferred $defer = null, string $buffer = '', ?LoggerInterface $logger = null)
     {
-        $this->state = $state = new ConnectionState($socket, $hpack, $settings, $defer !== null);
+        $this->state = $state = new ConnectionState($socket, $hpack, $settings, $defer !== null, $logger);
 
         $context = Context::current();
         $background = Context::background()->withCancel($this->cancel);
@@ -62,7 +62,7 @@ class Connection
             $e = null;
 
             try {
-                return static::processFrames($state, $defer, $buffer);
+                return static::processFrames($state, $defer, $buffer, $logger);
             } catch (CancellationException $e) {
                 $context->run(function () use ($state) {
                     $frame = new Frame(Frame::GOAWAY, 0, \pack('NN', $state->lastStreamId, 0));
@@ -113,7 +113,7 @@ class Connection
         $conn = new Connection($socket, $hpack, $settings, $defer = new Deferred(), $buffer, $logger);
 
         Task::await($defer->awaitable());
-
+        
         return $conn;
     }
 
@@ -142,11 +142,11 @@ class Connection
 
         $stream = new Stream($id, $this->state);
         $this->state->streams[$id] = $stream;
-
+        
         return $stream->sendRequest($request, $factory);
     }
 
-    protected static function processFrames(ConnectionState $state, ?Deferred $defer = null, string $buffer = '')
+    protected static function processFrames(ConnectionState $state, ?Deferred $defer = null, string $buffer = '', ?LoggerInterface $logger = null)
     {
         $len = \strlen($buffer);
 
@@ -184,6 +184,10 @@ class Connection
 
                 $buffer = \substr($buffer, $length);
                 $len -= $length;
+            }
+            
+            if ($logger) {
+                $logger->debug("IN << {$frame}");
             }
 
             // Ignore upgrade response.

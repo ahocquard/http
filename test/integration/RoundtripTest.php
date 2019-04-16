@@ -47,10 +47,13 @@ class RoundtripTest extends AsyncTestCase implements RequestHandlerInterface
             new PsrLogMessageProcessor()
         ]);
 
-        $this->manager = new ConnectionManager(60, 5, $this->logger);
+        $this->manager = new TcpConnectionManager(60, 5, $this->logger);
         $this->factory = new Psr17Factory();
 
-        $this->client = new HttpClient($this->manager, $this->factory, $this->logger);
+        $config = new HttpClientConfig($this->factory);
+        $config = $config->withConnectionManager($this->manager);
+
+        $this->client = new HttpClient($config, $this->logger);
 
         $server = new HttpServer($this->factory, $this->factory, $this->logger);
         $tcp = TcpServer::listen('127.0.0.1', 0);

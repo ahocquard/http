@@ -17,14 +17,12 @@ Provides an HTTP client and server example implementation backed by the `async` 
 The HTTP client is `PSR-18` compliant and implements `ClientInterface`. It requires a `PSR-17` response factory to convert incoming responses into `PSR-7` response objects. The client is completely async yet it does not make use or callbacks, promises, or any other kind of an async API. All network IO is non-blocking but the body stream of the HTTP request object you pass in might be blocking. You can execute multiple concurrent HTTP requests by making use of different `Task` objects (see [ext-async](https://github.com/concurrent-php/ext-async)).
 
 ```php
-use Concurrent\Http\ConnectionManager;
 use Concurrent\Http\HttpClient;
+use Concurrent\Http\HttpClientConfig;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
-$manager = new ConnectionManager();
 $factory = new Psr17Factory();
-
-$client = new HttpClient($manager, $factory);
+$client = new HttpClient(new HttpClientConfig($factory));
 
 $request = $factory->createRequest('GET', 'https://httpbin.org/status/201');
 $response = $client->sendRequest($request);

@@ -11,8 +11,8 @@
 
 declare(strict_types = 1);
 
-use Concurrent\Http\ConnectionManager;
 use Concurrent\Http\HttpClient;
+use Concurrent\Http\HttpClientConfig;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -20,7 +20,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 error_reporting(-1);
 ini_set('display_errors', (DIRECTORY_SEPARATOR == '\\') ? '0' : '1');
 
-$client = new HttpClient(new ConnectionManager(), $factory = new Psr17Factory());
+$client = new HttpClient(new HttpClientConfig($factory = new Psr17Factory()));
 $i = 0;
 
 while (true) {

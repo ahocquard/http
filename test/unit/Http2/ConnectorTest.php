@@ -12,15 +12,18 @@
 namespace Concurrent\Http\Http2;
 
 use Concurrent\AsyncTestCase;
-use Concurrent\Http\ConnectionManager;
 use Concurrent\Http\HttpClient;
+use Concurrent\Http\HttpClientConfig;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
 class ConnectorTest extends AsyncTestCase
 {
     public function test()
     {
-        $client = new HttpClient(new ConnectionManager(), $factory = new Psr17Factory(), null, new Http2Connector());
+        $config = new HttpClientConfig($factory = new Psr17Factory());
+        $config = $config->withHttp2Connector(new Http2Connector());
+
+        $client = new HttpClient($config);
 
         $request = $factory->createRequest('GET', 'https://de.wikipedia.org/wiki/Hypertext_Transfer_Protocol');
         $response = $client->sendRequest($request);

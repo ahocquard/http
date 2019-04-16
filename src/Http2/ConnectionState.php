@@ -17,6 +17,8 @@ use Concurrent\Awaitable;
 use Concurrent\Channel;
 use Concurrent\Deferred;
 use Concurrent\Network\SocketStream;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 class ConnectionState
 {
@@ -56,8 +58,10 @@ class ConnectionState
     ];
 
     protected $pings = [];
+    
+    protected $logger;
 
-    public function __construct(SocketStream $socket, HPack $hpack, array $settings, bool $client)
+    public function __construct(SocketStream $socket, HPack $hpack, array $settings, bool $client, ?LoggerInterface $logger)
     {
         $this->socket = $socket;
         $this->localSettings = $settings;
@@ -71,6 +75,8 @@ class ConnectionState
         
         $this->sendChannel = new Channel();
         $this->sendReady = $this->sendChannel->getIterator();
+        
+        $this->logger = $logger ?? new NullLogger();
     }
     
     public function __debugInfo(): array
@@ -89,11 +95,15 @@ class ConnectionState
 
     public function sendFrame(Frame $frame): void
     {
+        $this->logger->debug("OUT >> {$frame}");
+
         $this->socket->write($frame->encode());
     }
     
     public function sendFrameAsync(Frame $frame): void
     {
+        $this->logger->debug("OUT >> {$frame}");
+        
         $this->socket->writeAsync($frame->encode());
     }
 
@@ -102,6 +112,8 @@ class ConnectionState
         $buffer = '';
 
         foreach ($frames as $frame) {
+            $this->logger->debug("OUT >> {$frame}");
+            
             $buffer .= $frame->encode();
         }
 
@@ -113,6 +125,8 @@ class ConnectionState
         $buffer = '';
 
         foreach ($frames as $frame) {
+            $this->logger->debug("OUT >> {$frame}");
+            
             $buffer .= $frame->encode();
         }
 

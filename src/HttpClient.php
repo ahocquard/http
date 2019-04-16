@@ -15,13 +15,11 @@ namespace Concurrent\Http;
 
 use Concurrent\Deferred;
 use Concurrent\Task;
-use Concurrent\Http\Http2\Http2Connector;
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
 use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
-use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -40,12 +38,12 @@ class HttpClient extends HttpCodec implements ClientInterface
     
     protected $checking = [];
 
-    public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null, ?Http2Connector $http2 = null)
+    public function __construct(HttpClientConfig $config, ?LoggerInterface $logger = null)
     {
-        $this->manager = $manager;
-        $this->factory = $factory;
+        $this->manager = $config->getConnectionManager();
+        $this->factory = $config->getResponseFactory();
         $this->logger = $logger ?? new NullLogger();
-        $this->http2 = $http2;
+        $this->http2 = $config->getHttp2Connector();
     }
 
     /**
@@ -58,10 +56,6 @@ class HttpClient extends HttpCodec implements ClientInterface
         $encrypted = ($uri->getScheme() == 'https') ? true : false;
         $host = $uri->getHost();
         $port = $uri->getPort();
-
-        if (empty($port)) {
-            $port = $encrypted ? 443 : 80;
-        }
 
         if ($encrypted) {
             if ($this->http2) {
@@ -76,8 +70,8 @@ class HttpClient extends HttpCodec implements ClientInterface
         } else {
             $alpn = [];
         }
-
-        $key = $host . '|' . $port;
+        
+        $key = $this->manager->getKey($host, $port, $encrypted);
 
         if (isset($this->checking[$key])) {
             Task::await($this->checking[$key]);

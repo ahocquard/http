@@ -40,10 +40,13 @@ class HttpClientTest extends AsyncTestCase
             new PsrLogMessageProcessor()
         ]);
 
-        $this->manager = new ConnectionManager(60, 5, $this->logger);
+        $this->manager = new TcpConnectionManager(60, 5, $this->logger);
         $this->factory = new Psr17Factory();
 
-        $this->client = new HttpClient($this->manager, $this->factory, $this->logger);
+        $config = new HttpClientConfig($this->factory);
+        $config = $config->withConnectionManager($this->manager);
+
+        $this->client = new HttpClient($config, $this->logger);
     }
 
     protected function tearDown()
@@ -111,8 +114,11 @@ class HttpClientTest extends AsyncTestCase
     {
         $message = 'Hello World :)';
 
-        $http2 = new Http2Connector([], $this->logger);
-        $client = new HttpClient($this->manager, $this->factory, $this->logger, $http2);
+        $config = new HttpClientConfig($this->factory);
+        $config = $config->withConnectionManager($this->manager);
+        $config = $config->withHttp2Connector(new Http2Connector([], $this->logger));
+
+        $client = new HttpClient($config, $this->logger);
 
         for ($i = 0; $i < 3; $i++) {
             $request = $this->factory->createRequest('PUT', 'https://http2.golang.org/ECHO');

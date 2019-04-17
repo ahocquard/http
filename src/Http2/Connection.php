@@ -14,6 +14,7 @@ declare(strict_types = 1);
 namespace Concurrent\Http\Http2;
 
 use Concurrent\CancellationException;
+use Concurrent\Channel;
 use Concurrent\Context;
 use Concurrent\Deferred;
 use Concurrent\Task;
@@ -24,7 +25,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
-class Connection
+class Connection implements \IteratorAggregate
 {
     /**
      * Connection preface that must be sent by clients.
@@ -50,10 +51,13 @@ class Connection
     protected $task;
     
     protected $cancel;
+    
+    protected $inbound;
 
     protected function __construct(SocketStream $socket, HPack $hpack, array $settings, ?Deferred $defer = null, string $buffer = '', ?LoggerInterface $logger = null)
     {
         $this->state = $state = new ConnectionState($socket, $hpack, $settings, $defer !== null, $logger);
+        $this->inbound = new Channel();
 
         $context = Context::current();
         $background = Context::background()->withCancel($this->cancel);
@@ -77,7 +81,7 @@ class Connection
                 // Cannot do anything about this if it happens.
             } catch (\Throwable $e) {
                 if ($logger) {
-                    $this->logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
+                    $logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
                         'exception' => $e
                     ]);
                 }
@@ -85,6 +89,10 @@ class Connection
 
             if ($e && $defer) {
                 $defer->fail($e);
+            }
+
+            if ($state->requests) {
+                $state->requests->close($e);
             }
         });
     }
@@ -94,13 +102,13 @@ class Connection
         if ($this->cancel !== null) {
             $cancel = $this->cancel;
             $this->cancel = null;
-            
+
             $cancel();
         }
-        
+
         $this->state->close();
     }
-    
+
     public function __debugInfo(): array
     {
         return [
@@ -113,8 +121,22 @@ class Connection
         $conn = new Connection($socket, $hpack, $settings, $defer = new Deferred(), $buffer, $logger);
 
         Task::await($defer->awaitable());
-        
+
         return $conn;
+    }
+
+    public static function serve(SocketStream $socket, HPack $hpack, array $settings, ?LoggerInterface $logger = null): Connection
+    {
+        return new Connection($socket, $hpack, $settings, null, '', $logger);
+    }
+
+    public function getIterator()
+    {
+        if ($this->state->client) {
+            throw new \RuntimeException('Cannot access inbound HTTP requests in client mode');
+        }
+
+        return $this->state->requests->getIterator();
     }
 
     public function close(?\Throwable $e = null): void
@@ -142,7 +164,7 @@ class Connection
 
         $stream = new Stream($id, $this->state);
         $this->state->streams[$id] = $stream;
-        
+
         return $stream->sendRequest($request, $factory);
     }
 
@@ -185,7 +207,7 @@ class Connection
                 $buffer = \substr($buffer, $length);
                 $len -= $length;
             }
-            
+
             if ($logger) {
                 $logger->debug("IN << {$frame}");
             }
@@ -203,7 +225,7 @@ class Connection
                     case Frame::SETTINGS:
                         if (!($frame->flags & Frame::ACK)) {
                             $state->processSettings($frame);
-                            
+
                             if ($defer) {
                                 $tmp = $defer;
                                 $defer = null;
@@ -234,15 +256,27 @@ class Connection
                         throw new \Error('Invalid connection frame received');
                 }
             } else {
-                // Handle stream frame.
                 if (empty($state->streams[$frame->stream])) {
-                    switch ($frame->type) {
-                        case Frame::WINDOW_UPDATE:
-                        case Frame::PRIORITY:
-                            continue 2;
-                    }
+                    if ($state->client) {
+                        switch ($frame->type) {
+                            case Frame::WINDOW_UPDATE:
+                            case Frame::PRIORITY:
+                                continue 2;
+                        }
 
-                    break;
+                        break;
+                    } else {
+                        switch ($frame->type) {
+                            case Frame::WINDOW_UPDATE:
+                            case Frame::SETTINGS:
+                            case Frame::PRIORITY:
+                            case Frame::HEADERS:
+                                $state->streams[$frame->stream] = new Stream($frame->stream, $state);
+                                break;
+                            default:
+                                throw new \RuntimeException('Received invalid frame');
+                        }
+                    }
                 }
 
                 switch ($frame->type) {

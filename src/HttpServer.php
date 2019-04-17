@@ -15,9 +15,11 @@ namespace Concurrent\Http;
 
 use Concurrent\CancellationException;
 use Concurrent\Context;
+use Concurrent\Http\Http2\Http2Driver;
 use Concurrent\Network\Server;
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
+use Concurrent\Network\TlsServerEncryption;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
@@ -38,6 +40,8 @@ class HttpServer extends HttpCodec
 
     protected $logger;
     
+    protected $http2;
+    
     protected $upgrades = [];
 
     public function __construct(ServerRequestFactoryInterface $request, ResponseFactoryInterface $response, ?LoggerInterface $logger = null)
@@ -46,8 +50,25 @@ class HttpServer extends HttpCodec
         $this->response = $response;
         $this->logger = $logger ?? new NullLogger();
     }
-    
-    public function withUpgradeHandler(UpgradeHandler $handler): HttpServer
+
+    public function populateAlpnProtocols(TlsServerEncryption $tls): TlsServerEncryption
+    {
+        if ($this->http2) {
+            return $tls->withAlpnProtocols('h2', 'http/1.1');
+        }
+
+        return $tls->withAlpnProtocols('http/1.1');
+    }
+
+    public function withHttp2Driver(Http2Driver $http2): self
+    {
+        $server = clone $this;
+        $server->http2 = $http2;
+
+        return $server;
+    }
+
+    public function withUpgradeHandler(UpgradeHandler $handler): self
     {
         $server = clone $this;
         $server->upgrades[$handler->getProtocol()] = $handler;
@@ -55,9 +76,24 @@ class HttpServer extends HttpCodec
         return $server;
     }
 
-    public function run(Server $server, RequestHandlerInterface $handler): HttpServerListener
+    public function run(Server $server, RequestHandlerInterface $handler, ?TlsServerEncryption $tls = null): HttpServerListener
     {
-        return new HttpServerListener($server, function (SocketStream $socket, Context $context) use ($handler) {
+        return new HttpServerListener($server, function (SocketStream $socket, Context $context) use ($handler, $tls) {
+            $params = [
+                'SERVER_ADDR' => $socket->getAddress(),
+                'SERVER_PORT' => $socket->getPort(),
+                'REMOTE_ADDR' => $socket->getRemoteAddress(),
+                'REMOTE_PORT' => $socket->getRemotePort()
+            ];
+            
+            if ($tls) {
+                $info = $socket->encrypt();
+                
+                if ($info->alpn_protocol === 'h2') {
+                    return $this->http2->serve($socket, $context, $this->request, $this->response, $handler, $params);
+                }
+            }
+            
             $buffer = '';
             $first = true;
             $close = true;
@@ -65,7 +101,7 @@ class HttpServer extends HttpCodec
             do {
                 $socket->setOption(TcpSocket::NODELAY, false);
 
-                if (null === ($request = $this->readRequest($context, $socket, $buffer, $first))) {
+                if (null === ($request = $this->readRequest($context, $socket, $buffer, $first, $params))) {
                     break;
                 }
 
@@ -116,7 +152,7 @@ class HttpServer extends HttpCodec
         $handler->handleConnection(new UpgradeStream($request, $response, $socket, $buffer));
     }
 
-    protected function readRequest(Context $context, SocketStream $socket, string & $buffer, bool $first): ?ServerRequestInterface
+    protected function readRequest(Context $context, SocketStream $socket, string & $buffer, bool $first, array $params): ?ServerRequestInterface
     {
         $remaining = 0x4000;
 
@@ -160,7 +196,7 @@ class HttpServer extends HttpCodec
             throw new \RuntimeException('Invalid HTTP request line received');
         }
 
-        $request = $this->request->createServerRequest($m[1], $m[2]);
+        $request = $this->request->createServerRequest($m[1], $m[2], $params);
         $request = $request->withProtocolVersion($m[3]);
         $request = $this->populateHeaders($request, \substr($header, $pos + 1));
 

@@ -46,6 +46,8 @@ class ConnectionState
     
     public $sendReady;
 
+    public $requests;
+    
     public $localSettings = [];
 
     public $remoteSettings = [
@@ -69,14 +71,18 @@ class ConnectionState
         $this->client = $client;
 
         $this->nextStreamId = $client ? 1 : 2;
-        
+
         $this->receiveChannel = new Channel();
         $this->receiveReady = $this->receiveChannel->getIterator();
-        
+
         $this->sendChannel = new Channel();
         $this->sendReady = $this->sendChannel->getIterator();
-        
+
         $this->logger = $logger ?? new NullLogger();
+
+        if (!$client) {
+            $this->requests = new Channel($settings[Connection::SETTING_MAX_CONCURRENT_STREAMS]);
+        }
     }
     
     public function __debugInfo(): array
@@ -88,6 +94,10 @@ class ConnectionState
     
     public function close(?\Throwable $e = null): void
     {
+        if ($this->requests) {
+            $this->requests->close($e);
+        }
+        
         foreach (\array_values($this->streams) as $stream) {
             $stream->close($e);
         }

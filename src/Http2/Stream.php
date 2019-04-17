@@ -21,6 +21,8 @@ use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestFactoryInterface;
+use Psr\Http\Server\RequestHandlerInterface;
 
 class Stream
 {
@@ -109,7 +111,11 @@ class Stream
                     }
 
                     try {
-                        $this->defer->resolve($this->buffer);
+                        if ($this->defer) {
+                            $this->defer->resolve($this->buffer);
+                        } else {
+                            $this->acceptRequest();
+                        }
                     } finally {
                         $this->buffer = null;
                     }
@@ -120,7 +126,11 @@ class Stream
 
                 if ($frame->flags & Frame::END_HEADERS) {
                     try {
-                        $this->defer->resolve($this->buffer);
+                        if ($this->defer) {
+                            $this->defer->resolve($this->buffer);
+                        } else {
+                            $this->acceptRequest();
+                        }
                     } finally {
                         $this->buffer = null;
                     }
@@ -161,6 +171,54 @@ class Stream
                 }
                 break;
         }
+    }
+    
+    protected function acceptRequest()
+    {
+        $buffer = $this->buffer;
+
+        $this->state->requests->send(function (ServerRequestFactoryInterface $f1, ResponseFactoryInterface $f2, RequestHandlerInterface $handler, array $params = []) use ($buffer) {
+            $headers = $this->state->hpack->decode($buffer);
+            $path = $this->getFirstHeader(':path', $headers);
+
+            $uri = \vsprintf('%s://%s%s', [
+                $this->getFirstHeader(':scheme', $headers),
+                $this->getFirstHeader(':authority', $headers),
+                $path
+            ]);
+
+            $request = $f1->createServerRequest($this->getFirstHeader(':method', $headers), $uri, array_filter(array_merge($params, [
+                'REQUEST_TIME' => \time(),
+                'REQUEST_TIME_FLOAT' => \microtime(true)
+            ])));
+
+            $request = $request->withProtocolVersion('2.0');
+
+            if (false !== ($i = \strpos($path, '?'))) {
+                $query = null;
+                \parse_str(\substr($path, $i + 1), $query);
+
+                $request = $request->withQueryParams((array) $query);
+            }
+
+            foreach ($headers as $entry) {
+                if (($entry[0][0] ?? null) !== ':') {
+                    $request = $request->withAddedHeader(...$entry);
+                }
+            }
+
+            if ($this->channel !== null) {
+                $request = $request->withBody(new EntityStream($this, $this->channel->getIterator()));
+            }
+
+            $response = $handler->handle($request);
+
+            $this->sendHeaders($this->encodeHeaders($response, [
+                ':status' => (string) $response->getStatusCode()
+            ]));
+
+            $this->sendBody($response);
+        });
     }
 
     public function updateReceiveWindow(int $size): void

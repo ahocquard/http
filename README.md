@@ -19,9 +19,8 @@ The HTTP client is `PSR-18` compliant and implements `ClientInterface`. It requi
 ```php
 use Concurrent\Http\HttpClient;
 use Concurrent\Http\HttpClientConfig;
-use Nyholm\Psr7\Factory\Psr17Factory;
 
-$factory = new Psr17Factory();
+$factory = new \Nyholm\Psr7\Factory\Psr17Factory();
 $client = new HttpClient(new HttpClientConfig($factory));
 
 $request = $factory->createRequest('GET', 'https://httpbin.org/status/201');
@@ -48,14 +47,14 @@ The HTTP server uses an async TCP server and translates incoming HTTP requests i
 
 ```php
 use Concurrent\Http\HttpServer;
+use Concurrent\Http\HttpServerConfig;
 use Concurrent\Network\TcpServer;
-use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
-$factory = new Psr17Factory();
+$factory = new \Nyholm\Psr7\Factory\Psr17Factory();
 
 $handler = new class($factory) implements RequestHandlerInterface {
     private $factory;
@@ -69,6 +68,6 @@ $handler = new class($factory) implements RequestHandlerInterface {
     }
 };
 
-$server = new HttpServer($factory, $factory);
+$server = new HttpServer(new HttpServerConfig($factory, $factory));
 $server->run(TcpServer::listen('127.0.0.1', 8080), $handler);
 ```

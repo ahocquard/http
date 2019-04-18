@@ -15,14 +15,11 @@ namespace Concurrent\Http;
 
 use Concurrent\CancellationException;
 use Concurrent\Context;
-use Concurrent\Http\Http2\Http2Driver;
 use Concurrent\Network\Server;
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
 use Concurrent\Network\TlsServerEncryption;
-use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Log\LoggerInterface;
@@ -30,13 +27,9 @@ use Psr\Log\NullLogger;
 
 class HttpServer extends HttpCodec
 {
-    protected $request;
+    protected $requestFactory;
     
-    protected $response;
-
-    protected $server;
-
-    protected $handler;
+    protected $responseFactory;
 
     protected $logger;
     
@@ -44,36 +37,25 @@ class HttpServer extends HttpCodec
     
     protected $upgrades = [];
 
-    public function __construct(ServerRequestFactoryInterface $request, ResponseFactoryInterface $response, ?LoggerInterface $logger = null)
+    public function __construct(HttpServerConfig $config, ?LoggerInterface $logger = null)
     {
-        $this->request = $request;
-        $this->response = $response;
+        $this->requestFactory = $config->getRequestFactory();
+        $this->responseFactory = $config->getResponseFactory();
+        $this->http2 = $config->getHttp2Driver();
+        $this->upgrades = $config->getUpgradeHandlers();
+
         $this->logger = $logger ?? new NullLogger();
     }
 
-    public function populateAlpnProtocols(TlsServerEncryption $tls): TlsServerEncryption
+    public function createEncryption(): TlsServerEncryption
     {
+        $tls = new TlsServerEncryption();
+
         if ($this->http2) {
             return $tls->withAlpnProtocols('h2', 'http/1.1');
         }
 
         return $tls->withAlpnProtocols('http/1.1');
-    }
-
-    public function withHttp2Driver(Http2Driver $http2): self
-    {
-        $server = clone $this;
-        $server->http2 = $http2;
-
-        return $server;
-    }
-
-    public function withUpgradeHandler(UpgradeHandler $handler): self
-    {
-        $server = clone $this;
-        $server->upgrades[$handler->getProtocol()] = $handler;
-
-        return $server;
     }
 
     public function run(Server $server, RequestHandlerInterface $handler, ?TlsServerEncryption $tls = null): HttpServerListener
@@ -90,7 +72,7 @@ class HttpServer extends HttpCodec
                 $info = $socket->encrypt();
                 
                 if ($info->alpn_protocol === 'h2') {
-                    return $this->http2->serve($socket, $context, $this->request, $this->response, $handler, $params);
+                    return $this->http2->serve($socket, $context, $this->requestFactory, $this->responseFactory, $handler, $params);
                 }
             }
             
@@ -139,7 +121,7 @@ class HttpServer extends HttpCodec
     
     protected function handleUpgrade(UpgradeHandler $handler, SocketStream $socket, string $buffer, ServerRequestInterface $request)
     {
-        $response = $this->response->createResponse(101);
+        $response = $this->responseFactory->createResponse(101);
         $response = $response->withHeader('Connection', 'upgrade');
 
         $response = $handler->populateResponse($request, $response);
@@ -196,7 +178,7 @@ class HttpServer extends HttpCodec
             throw new \RuntimeException('Invalid HTTP request line received');
         }
 
-        $request = $this->request->createServerRequest($m[1], $m[2], $params);
+        $request = $this->requestFactory->createServerRequest($m[1], $m[2], $params);
         $request = $request->withProtocolVersion($m[3]);
         $request = $this->populateHeaders($request, \substr($header, $pos + 1));
 

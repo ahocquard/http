@@ -54,8 +54,10 @@ class RoundtripTest extends AsyncTestCase implements RequestHandlerInterface
         $config = $config->withConnectionManager($this->manager);
 
         $this->client = new HttpClient($config, $this->logger);
+        
+        $config = new HttpServerConfig($this->factory, $this->factory);
 
-        $server = new HttpServer($this->factory, $this->factory, $this->logger);
+        $server = new HttpServer($config, $this->logger);
         $tcp = TcpServer::listen('127.0.0.1', 0);
 
         $this->server = $server->run($tcp, $this);

@@ -15,9 +15,9 @@ use Concurrent\Deferred;
 use Concurrent\SignalWatcher;
 use Concurrent\Timer;
 use Concurrent\Http\HttpServer;
+use Concurrent\Http\HttpServerConfig;
 use Concurrent\Http\Http2\Http2Driver;
 use Concurrent\Network\TcpServer;
-use Concurrent\Network\TlsServerEncryption;
 use Monolog\Logger;
 use Monolog\Processor\PsrLogMessageProcessor;
 use Nyholm\Psr7\Factory\Psr17Factory;
@@ -83,10 +83,12 @@ $wait = function () {
     }
 };
 
-$server = new HttpServer($factory, $factory, $logger);
-$server = $server->withHttp2Driver(new Http2Driver([], $logger));
+$config = new HttpServerConfig($factory, $factory);
+$config = $config->withHttp2Driver(new Http2Driver([], $logger));
 
-$tls = $server->populateAlpnProtocols(new TlsServerEncryption());
+$server = new HttpServer($config, $logger);
+
+$tls = $server->createEncryption();
 $tls = $tls->withDefaultCertificate(__DIR__ . '/cert/localhost.pem', null, 'localhost');
 
 $tcp = TcpServer::listen('127.0.0.1', 8080, $tls);

@@ -36,29 +36,25 @@ class TcpConnectionManager implements ConnectionManager
 
     protected $lifetime;
 
+    protected $encryption;
+    
     protected $timer;
 
     protected $logger;
 
     /**
      * Create a new connection manager with limited concurrency and socket lifetime.
-     * 
-     * @param int $lifetime Maximum idle time in seconds.
-     * @param int $interval Garbage collection interval in seconds.
-     * @param LoggerInterface $logger
      */
-    public function __construct(int $lifetime = 60, int $interval = 5, ?LoggerInterface $logger = null)
+    public function __construct(?TcpConnectionManagerConfig $config = null, ?LoggerInterface $logger = null)
     {
-        if ($lifetime < 5) {
-            throw new \InvalidArgumentException(\sprintf('Connection lifetime must not be less than 5 seconds'));
+        if ($config === null) {
+            $config = new TcpConnectionManagerConfig();
         }
 
-        if ($interval < 5) {
-            throw new \InvalidArgumentException(\sprintf('Expiry check interval must not be less than 5 seconds'));
-        }
-
-        $this->lifetime = $lifetime;
-        $this->interval = $interval * 1000;
+        $this->lifetime = $config->getMaxIdleTime();
+        $this->interval = $config->getIdleCheckInterval() * 1000;
+        $this->encryption = $config->getCustomEncryption();
+        
         $this->logger = $logger ?? new NullLogger();
 
         $this->expires = new \SplPriorityQueue();
@@ -119,9 +115,9 @@ class TcpConnectionManager implements ConnectionManager
         if ($port === null) {
             $port = $encrypted ? 443 : 80;
         }
-
+        
         $key = \sprintf('%s|%u|%s', $ip = \gethostbyname($host), $port, $encrypted ? $host : '');
-
+        
         do {
             if (!empty($this->conns[$key])) {
                 $this->logger->debug('Reuse connection tcp://{ip}:{port}', [
@@ -141,7 +137,7 @@ class TcpConnectionManager implements ConnectionManager
                     'port' => $port
                 ]);
 
-                $conn = $this->connect($key, $protocols);
+                $conn = $this->connect($host, $key, $protocols);
 
                 break;
             }
@@ -218,7 +214,7 @@ class TcpConnectionManager implements ConnectionManager
         $conn->socket->close($e);
     }
 
-    protected function connect(string $key, array $protocols): Connection
+    protected function connect(string $host, string $key, array $protocols): Connection
     {
         if (isset($this->counts[$key])) {
             $this->counts[$key]++;
@@ -227,10 +223,21 @@ class TcpConnectionManager implements ConnectionManager
         }
 
         try {
-            list ($host, $port, $encrypt) = \explode('|', $key);
+            list ($ip, $port, $encrypt) = \explode('|', $key);
 
             if ($encrypt !== '') {
                 $tls = new TlsClientEncryption();
+
+                if (isset($this->encryption[$host])) {
+                    $tls = $this->encryption[$host]($tls);
+                }
+
+                $host .= ':' . $port;
+
+                if (isset($this->encryption[$host])) {
+                    $tls = $this->encryption[$host]($tls);
+                }
+
                 $tls = $tls->withPeerName($encrypt);
 
                 if (!empty($protocols)) {
@@ -240,7 +247,7 @@ class TcpConnectionManager implements ConnectionManager
                 $tls = null;
             }
 
-            $socket = TcpSocket::connect($host, (int) $port, $tls);
+            $socket = TcpSocket::connect($ip, (int) $port, $tls);
 
             try {
                 if ($encrypt) {

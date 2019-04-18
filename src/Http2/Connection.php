@@ -175,7 +175,7 @@ class Connection implements \IteratorAggregate
         while (true) {
             while ($len < 9) {
                 if (null === ($chunk = $state->socket->read())) {
-                    throw new \Error('Connection closed by remote peer');
+                    return;
                 }
 
                 $buffer .= $chunk;
@@ -195,7 +195,7 @@ class Connection implements \IteratorAggregate
             } else {
                 while ($len < $length) {
                     if (null === ($chunk = $state->socket->read())) {
-                        throw new \Error('Connection closed by remote peer');
+                        return;
                     }
 
                     $buffer .= $chunk;
@@ -217,7 +217,8 @@ class Connection implements \IteratorAggregate
                 // Handle connection frame.
                 switch ($frame->type) {
                     case Frame::GOAWAY:
-                        throw new \Error('Connection closed by remote peer');
+                        // TODO: Prepare for connection shutdown...
+                        break;
                     case Frame::SETTINGS:
                         if (!($frame->flags & Frame::ACK)) {
                             $state->processSettings($frame);
@@ -270,7 +271,7 @@ class Connection implements \IteratorAggregate
                                 $state->streams[$frame->stream] = new Stream($frame->stream, $state);
                                 break;
                             default:
-                                throw new \RuntimeException('Received invalid frame');
+                                throw new \RuntimeException('Received invalid frame: ' . $frame);
                         }
                     }
                 }

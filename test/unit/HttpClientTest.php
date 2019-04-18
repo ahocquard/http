@@ -40,7 +40,7 @@ class HttpClientTest extends AsyncTestCase
             new PsrLogMessageProcessor()
         ]);
 
-        $this->manager = new TcpConnectionManager(60, 5, $this->logger);
+        $this->manager = new TcpConnectionManager(null, $this->logger);
         $this->factory = new Psr17Factory();
 
         $config = new HttpClientConfig($this->factory);

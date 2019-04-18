@@ -23,6 +23,7 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 class Stream
@@ -214,11 +215,35 @@ class Stream
 
             $response = $handler->handle($request);
 
-            $this->sendHeaders($this->encodeHeaders($response, [
-                ':status' => (string) $response->getStatusCode()
-            ]));
+            $body = $request->getBody();
 
-            $this->sendBody($response);
+            try {
+                while (!$body->eof()) {
+                    $body->read(0xFFFF);
+                }
+            } finally {
+                $body->close();
+            }
+
+            $body = $response->getBody();
+
+            try {
+                if ($body->isSeekable()) {
+                    $body->rewind();
+                }
+
+                $chunk = $body->read(8192);
+
+                $this->sendHeaders($this->encodeHeaders($response, [
+                    ':status' => (string) $response->getStatusCode()
+                ]), $chunk === '');
+
+                if ($chunk !== '') {
+                    $this->sendBody($body, $chunk);
+                }
+            } finally {
+                $body->close();
+            }
         });
     }
 
@@ -254,7 +279,7 @@ class Stream
         } else {
             $path = '/' . \ltrim($target, '/');
         }
-
+        
         $headers = [
             ':method' => $request->getMethod(),
             ':scheme' => $uri->getScheme(),
@@ -262,11 +287,25 @@ class Stream
             ':path' => $path
         ];
 
-        $this->sendHeaders($this->encodeHeaders($request, $headers, [
-            'host'
-        ]));
+        $body = $request->getBody();
 
-        $this->sendBody($request);
+        try {
+            if ($body->isSeekable()) {
+                $body->rewind();
+            }
+
+            $chunk = $body->read(8192);
+
+            $this->sendHeaders($this->encodeHeaders($request, $headers, [
+                'host'
+            ]), $chunk === '');
+
+            if ($chunk !== '') {
+                $this->sendBody($body, $chunk);
+            }
+        } finally {
+            $body->close();
+        }
 
         $this->defer = new Deferred();
 
@@ -305,77 +344,74 @@ class Stream
 
     protected function sendHeaders(string $headers, bool $nobody = false)
     {
-        $flags = Frame::END_HEADERS | ($nobody ? Frame::END_STREAM : Frame::NOFLAG);
+        $flags = ($nobody ? Frame::END_STREAM : Frame::NOFLAG);
 
         if (\strlen($headers) > 0x4000) {
             $parts = \str_split($headers, 0x4000);
             $frames = [];
 
-            $frames[] = new Frame(Frame::HEADERS, $this->id, $parts[0]);
+            $frames[] = new Frame(Frame::HEADERS, $this->id, $parts[0], $flags);
 
             for ($size = \count($parts) - 2, $i = 1; $i < $size; $i++) {
                 $frames[] = new Frame(Frame::CONTINUATION, $this->id, $parts[$i]);
             }
 
-            $frames[] = new Frame(Frame::CONTINUATION, $this->id, $parts[\count($parts) - 1], $flags);
+            $frames[] = new Frame(Frame::CONTINUATION, $this->id, $parts[\count($parts) - 1], Frame::END_HEADERS);
 
             $this->state->sendFrames($frames);
         } else {
-            $this->state->sendFrame(new Frame(Frame::HEADERS, $this->id, $headers, $flags));
+            $this->state->sendFrame(new Frame(Frame::HEADERS, $this->id, $headers, Frame::END_HEADERS | $flags));
         }
     }
 
-    protected function sendBody(MessageInterface $message): int
+    protected function sendBody(StreamInterface $body, string $chunk): int
     {
-        $body = $message->getBody();
         $sent = 0;
+        $eof = false;
 
-        if ($body->isSeekable()) {
-            $body->rewind();
-        }
-
-        try {
-            $eof = false;
-
-            do {
+        do {
+            if ($chunk === null) {
                 $chunk = HttpCodec::readBufferedChunk($body, 8192, $eof);
-                $len = \strlen($chunk);
+            } else {
+                $eof = $body->eof();
+            }
 
-                if ($eof && $len == 0) {
-                    $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
-                }
+            $len = \strlen($chunk);
 
-                while ($len > 0) {
-                    $available = \max(0, \min($len, $this->sendWindow, $this->state->sendWindow));
+            if ($eof && $len == 0) {
+                $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
+            }
 
-                    if ($available == 0) {
-                        if ($this->sendWindow <= 0) {
-                            $this->sendReady->next();
-                        } else {
-                            $this->state->sendReady->next();
-                        }
+            while ($len > 0) {
+                $available = \max(0, \min($len, $this->sendWindow, $this->state->sendWindow));
 
-                        continue;
-                    }
-
-                    $this->sendWindow -= $available;
-                    $this->state->sendWindow -= $available;
-
-                    if ($available < $len) {
-                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, \substr($chunk, 0, $available)));
-
-                        $chunk = \substr($chunk, $available);
+                if ($available == 0) {
+                    if ($this->sendWindow <= 0) {
+                        $this->sendReady->next();
                     } else {
-                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk, $eof ? Frame::END_STREAM : Frame::NOFLAG));
+                        $this->state->sendReady->next();
                     }
 
-                    $sent += $available;
-                    $len -= $available;
+                    continue;
                 }
-            } while (!$eof);
-        } finally {
-            $body->close();
-        }
+
+                $this->sendWindow -= $available;
+                $this->state->sendWindow -= $available;
+
+                if ($available < $len) {
+                    $this->state->sendFrame(new Frame(Frame::DATA, $this->id, \substr($chunk, 0, $available)));
+
+                    $chunk = \substr($chunk, $available);
+                } else {
+                    $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk, $eof ? Frame::END_STREAM : Frame::NOFLAG));
+                }
+
+                $sent += $available;
+                $len -= $available;
+            }
+
+            $chunk = null;
+        } while (!$eof);
 
         return $sent;
     }

@@ -13,6 +13,10 @@ declare(strict_types = 1);
 
 use Concurrent\Http\HttpClient;
 use Concurrent\Http\HttpClientConfig;
+use Concurrent\Http\TcpConnectionManager;
+use Concurrent\Http\TcpConnectionManagerConfig;
+use Concurrent\Http\Http2\Http2Connector;
+use Concurrent\Network\TlsClientEncryption;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -20,11 +24,23 @@ require_once __DIR__ . '/../vendor/autoload.php';
 error_reporting(-1);
 ini_set('display_errors', (DIRECTORY_SEPARATOR == '\\') ? '0' : '1');
 
-$client = new HttpClient(new HttpClientConfig($factory = new Psr17Factory()));
+$config = new TcpConnectionManagerConfig();
+
+$config = $config->withCustomEncryption('localhost', function (TlsClientEncryption $tls): TlsClientEncryption {
+    return $tls->withAllowSelfSigned(true);
+});
+
+$manager = new TcpConnectionManager($config);
+
+$config = new HttpClientConfig($factory = new Psr17Factory());
+$config = $config->withConnectionManager($manager);
+$config = $config->withHttp2Connector(new Http2Connector());
+
+$client = new HttpClient($config);
 $i = 0;
 
 while (true) {
-    $request = $factory->createRequest('GET', 'http://localhost:8080/');    
+    $request = $factory->createRequest('GET', 'https://localhost:8080/');
     $response = $client->sendRequest($request);
 
     print_r(array_map(function ($v) {

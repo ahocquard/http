@@ -249,20 +249,9 @@ class HttpServer extends HttpCodec
             if ($body->isSeekable()) {
                 $body->rewind();
             }
-
-            if ($body->eof()) {
-                $this->writeHeader($socket, $response, '', $close, 0, !$close);
-                return;
-            }
-
-            $chunk = '';
+            
             $eof = false;
-            $i = 0;
-
-            while (!$eof && ($i = \strlen($chunk)) < 0x8000) {
-                $chunk .= $body->read(0x8000 - $i);
-                $eof = $body->eof();
-            }
+            $chunk = self::readBufferedChunk($body, 0x8000, $eof);
 
             if ($eof) {
                 $this->writeHeader($socket, $response, $chunk, $close, \strlen($chunk), !$close);
@@ -275,8 +264,12 @@ class HttpServer extends HttpCodec
                 $this->writeHeader($socket, $response, $chunk, $close, -1);
 
                 do {
-                    $socket->write($chunk = $body->read(0xFFFF));
-                } while (!$body->eof());
+                    $chunk = self::readBufferedChunk($body, 8192, $eof);
+
+                    if (\strlen($chunk) > 0) {
+                        $socket->write($chunk);
+                    }
+                } while (!$eof);
 
                 return;
             }
@@ -284,19 +277,20 @@ class HttpServer extends HttpCodec
             $this->writeHeader($socket, $response, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), $close, -1);
 
             do {
-                $chunk = $body->read(0xFFFF);
+                $chunk = self::readBufferedChunk($body, 8192, $eof);
+                $len = \strlen($chunk);
 
-                if ($eof = $body->eof()) {
-                    $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
-                    
-                    if (!$close) {
-                        $socket->setOption(TcpSocket::NODELAY, true);
+                if ($eof) {
+                    $socket->setOption(TcpSocket::NODELAY, true);
+
+                    if ($len == 0) {
+                        $socket->write("0\r\n\r\n");
+                    } else {
+                        $socket->write(\sprintf("%x\r\n%s\r\n0\r\n\r\n", $len, $chunk));
                     }
                 } else {
-                    $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
+                    $socket->write(\sprintf("%x\r\n%s\r\n", $len, $chunk));
                 }
-
-                $socket->write($chunk);
             } while (!$eof);
         } finally {
             $body->close();

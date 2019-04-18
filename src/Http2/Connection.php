@@ -208,10 +208,6 @@ class Connection implements \IteratorAggregate
                 $len -= $length;
             }
 
-            if ($logger) {
-                $logger->debug("IN << {$frame}");
-            }
-
             // Ignore upgrade response.
             if ($frame->stream == 1) {
                 continue;

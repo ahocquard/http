@@ -16,6 +16,7 @@ namespace Concurrent\Http\Http2;
 use Concurrent\Channel;
 use Concurrent\Deferred;
 use Concurrent\Task;
+use Concurrent\Http\HttpCodec;
 use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
@@ -327,22 +328,22 @@ class Stream
     protected function sendBody(MessageInterface $message): int
     {
         $body = $message->getBody();
+        $sent = 0;
 
         if ($body->isSeekable()) {
             $body->rewind();
         }
 
-        $sent = 0;
-
         try {
-            while (!$body->eof()) {
-                $chunk = $body->read(0x4000);
+            $eof = false;
 
-                if ($chunk === '') {
-                    continue;
-                }
-
+            do {
+                $chunk = HttpCodec::readBufferedChunk($body, 8192, $eof);
                 $len = \strlen($chunk);
+
+                if ($eof && $len == 0) {
+                    $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
+                }
 
                 while ($len > 0) {
                     $available = \max(0, \min($len, $this->sendWindow, $this->state->sendWindow));
@@ -365,16 +366,13 @@ class Stream
 
                         $chunk = \substr($chunk, $available);
                     } else {
-                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk));
+                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk, $eof ? Frame::END_STREAM : Frame::NOFLAG));
                     }
 
+                    $sent += $available;
                     $len -= $available;
                 }
-
-                $sent += $len;
-            }
-
-            $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
+            } while (!$eof);
         } finally {
             $body->close();
         }

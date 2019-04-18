@@ -214,19 +214,8 @@ class HttpClient extends HttpCodec implements ClientInterface
                 $body->rewind();
             }
 
-            if ($body->eof()) {
-                $this->writeHeader($socket, $request, '', false, 0, true);
-                return;
-            }
-
-            $chunk = '';
             $eof = false;
-            $i = 0;
-
-            while (!$eof && ($i = \strlen($chunk)) < 0x8000) {
-                $chunk .= $body->read(0x8000 - $i);
-                $eof = $body->eof();
-            }
+            $chunk = self::readBufferedChunk($body, 0x8000, $eof);
 
             if ($eof) {
                 $this->writeHeader($socket, $request, $chunk, false, \strlen($chunk), true);
@@ -243,17 +232,20 @@ class HttpClient extends HttpCodec implements ClientInterface
             $this->writeHeader($socket, $request, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), false, -1);
 
             do {
-                $chunk = $body->read(0xFFFF);
+                $chunk = self::readBufferedChunk($body, 8192, $eof);
+                $len = \strlen($chunk);
 
-                if ($eof = $body->eof()) {
-                    $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
-
+                if ($eof) {
                     $socket->setOption(TcpSocket::NODELAY, true);
-                } else {
-                    $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
-                }
 
-                $socket->write($chunk);
+                    if ($len == 0) {
+                        $socket->write("0\r\n\r\n");
+                    } else {
+                        $socket->write(\sprintf("%x\r\n%s\r\n0\r\n\r\n", $len, $chunk));
+                    }
+                } else {
+                    $socket->write(\sprintf("%x\r\n%s\r\n", $len, $chunk));
+                }
             } while (!$eof);
         } finally {
             $body->close();

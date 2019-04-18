@@ -105,15 +105,11 @@ class ConnectionState
 
     public function sendFrame(Frame $frame): void
     {
-        $this->logger->debug("OUT >> {$frame}");
-
         $this->socket->write($frame->encode());
     }
-    
+
     public function sendFrameAsync(Frame $frame): void
     {
-        $this->logger->debug("OUT >> {$frame}");
-        
         $this->socket->writeAsync($frame->encode());
     }
 
@@ -122,8 +118,6 @@ class ConnectionState
         $buffer = '';
 
         foreach ($frames as $frame) {
-            $this->logger->debug("OUT >> {$frame}");
-            
             $buffer .= $frame->encode();
         }
 
@@ -135,8 +129,6 @@ class ConnectionState
         $buffer = '';
 
         foreach ($frames as $frame) {
-            $this->logger->debug("OUT >> {$frame}");
-            
             $buffer .= $frame->encode();
         }
 

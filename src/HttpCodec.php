@@ -15,6 +15,7 @@ namespace Concurrent\Http;
 
 use Concurrent\Stream\ReadableStream;
 use Psr\Http\Message\MessageInterface;
+use Psr\Http\Message\StreamInterface;
 
 abstract class HttpCodec
 {
@@ -24,6 +25,32 @@ abstract class HttpCodec
 
     private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
     
+    public static function readBufferedChunk(StreamInterface $body, int $chunkSize, bool & $eof): string
+    {
+        $remaining = $chunkSize;
+        $buffer = '';
+
+        while ($remaining > 0) {
+            $chunk = $body->read($remaining);
+            $len = \strlen($chunk);
+
+            $eof = $body->eof();
+
+            if ($len == $chunkSize) {
+                return $chunk;
+            }
+
+            $buffer .= $chunk;
+            $remaining -= $len;
+
+            if ($eof || $remaining == 0) {
+                break;
+            }
+        }
+
+        return $buffer;
+    }
+
     protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
     {
         $m = null;

@@ -76,7 +76,7 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
             $response = $this->factory->createResponse();
             $response = $response->withHeader('Content-Type', 'text/event-stream');
             $response = $response->withHeader('Cache-Control', 'no-cache');
-            $response = $response->withHeader('X-Stream-Body', 'yes');
+            $response = $response->withHeader(HttpServer::STREAM_HEADER_NAME, 'yes');
 
             $response = $response->withBody(new class() extends StreamAdapter {
 

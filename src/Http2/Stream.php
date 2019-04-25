@@ -14,9 +14,11 @@ declare(strict_types = 1);
 namespace Concurrent\Http\Http2;
 
 use Concurrent\Channel;
+use Concurrent\ChannelGroup;
 use Concurrent\Deferred;
 use Concurrent\Task;
 use Concurrent\Http\HttpCodec;
+use Concurrent\Http\HttpServer;
 use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
@@ -41,12 +43,16 @@ class Stream
     protected $receiveWindow;
 
     protected $receiveChannel;
+    
+    protected $receiveChannelGroup;
 
     protected $receiveReady;
 
     protected $sendWindow;
 
     protected $sendChannel;
+    
+    protected $sendChannelGroup;
 
     protected $sendReady;
 
@@ -58,10 +64,15 @@ class Stream
         $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
         $this->sendWindow = $state->remoteSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
 
-        $this->receiveChannel = new Channel();
-        $this->receiveReady = $this->receiveChannel->getIterator();
+        $this->receiveChannelGroup = new ChannelGroup([
+            $this->receiveChannel = new Channel()
+        ], 0);
 
-        $this->sendChannel = new Channel();
+        $this->sendChannelGroup = new ChannelGroup([
+            $this->sendChannel = new Channel()
+        ], 0);
+
+        $this->receiveReady = $this->receiveChannel->getIterator();
         $this->sendReady = $this->sendChannel->getIterator();
     }
 
@@ -168,8 +179,8 @@ class Stream
             case Frame::WINDOW_UPDATE:
                 $this->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
 
-                if ($this->sendWindow > 0 && $this->sendChannel->isReadyForSend()) {
-                    $this->sendChannel->send(null);
+                if ($this->sendWindow > 0) {
+                    $this->sendChannelGroup->send(null);
                 }
                 break;
         }
@@ -214,7 +225,6 @@ class Stream
             }
 
             $response = $handler->handle($request);
-
             $body = $request->getBody();
 
             try {
@@ -232,14 +242,20 @@ class Stream
                     $body->rewind();
                 }
 
-                $chunk = $body->read(8192);
+                $stream = ($response->getHeaderLine(HttpServer::STREAM_HEADER_NAME) != '');
+
+                if ($stream) {
+                    $chunk = null;
+                } else {
+                    $chunk = $body->read(8192);
+                }
 
                 $this->sendHeaders($this->encodeHeaders($response, [
                     ':status' => (string) $response->getStatusCode()
-                ]), $chunk === '');
+                ]), !$stream && ($chunk === ''));
 
-                if ($chunk !== '') {
-                    $this->sendBody($body, $chunk);
+                if ($stream || $chunk !== '') {
+                    $this->sendBody($body, $chunk, $stream);
                 }
             } finally {
                 $body->close();
@@ -255,18 +271,14 @@ class Stream
             $frame,
             new Frame(Frame::WINDOW_UPDATE, $this->id, $frame->data)
         ]);
-
+        
         $this->state->receiveWindow += $size;
 
-        while ($this->state->receiveWindow > 0 && $this->state->receiveChannel->isReadyForSend()) {
-            $this->state->receiveChannel->send(null);
-        }
+        while ($this->state->receiveWindow > 0 && null !== $this->state->receiveChannelGroup->send(null));
 
         $this->receiveWindow += $size;
 
-        while ($this->receiveWindow > 0 && $this->receiveChannel->isReadyForSend()) {
-            $this->receiveChannel->send(null);
-        }
+        while ($this->receiveWindow > 0 && null !== $this->receiveChannelGroup->send(null));
     }
 
     public function sendRequest(RequestInterface $request, ResponseFactoryInterface $factory): ResponseInterface
@@ -364,14 +376,19 @@ class Stream
         }
     }
 
-    protected function sendBody(StreamInterface $body, string $chunk): int
+    protected function sendBody(StreamInterface $body, ?string $chunk, bool $stream = false): int
     {
         $sent = 0;
         $eof = false;
 
         do {
             if ($chunk === null) {
-                $chunk = HttpCodec::readBufferedChunk($body, 8192, $eof);
+                if ($stream) {
+                    $chunk = $body->read(8192);
+                    $eof = $body->eof();
+                } else {
+                    $chunk = HttpCodec::readBufferedChunk($body, 8192, $eof);
+                }
             } else {
                 $eof = $body->eof();
             }
@@ -423,7 +440,8 @@ class Stream
             'content-length',
             'keep-alive',
             'transfer-encoding',
-            'te'
+            'te',
+            'x-stream-body'
         ];
 
         foreach (\array_change_key_case($message->getHeaders(), \CASE_LOWER) as $k => $v) {

@@ -170,8 +170,8 @@ class HttpServerListener
                     break;
                 }
 
-                // Spawn new worker if concurrency limit has not been reached and no worker is idle.
-                if ($this->count < $this->concurrency && !$channel->isReadyForSend()) {
+                // Spawn new worker if concurrency limit has not been reached yet.
+                if ($this->count < $this->concurrency) {
                     $this->count++;
 
                     Task::asyncWithContext($context, $worker, $channel->getIterator());

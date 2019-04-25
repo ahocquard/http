@@ -19,6 +19,7 @@ use Concurrent\Deferred;
 use Concurrent\Network\SocketStream;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Concurrent\ChannelGroup;
 
 class ConnectionState
 {
@@ -38,11 +39,15 @@ class ConnectionState
         
     public $receiveChannel;
     
+    public $receiveChannelGroup;
+    
     public $receiveReady;
     
     public $sendWindow = Connection::INITIAL_WINDOW_SIZE;
     
     public $sendChannel;
+    
+    public $sendChannelGroup;
     
     public $sendReady;
 
@@ -72,10 +77,15 @@ class ConnectionState
 
         $this->nextStreamId = $client ? 1 : 2;
 
-        $this->receiveChannel = new Channel();
-        $this->receiveReady = $this->receiveChannel->getIterator();
+        $this->receiveChannelGroup = new ChannelGroup([
+            $this->receiveChannel = new Channel()
+        ], 0);
 
-        $this->sendChannel = new Channel();
+        $this->sendChannelGroup = new ChannelGroup([
+            $this->sendChannel = new Channel()
+        ], 0);
+
+        $this->receiveReady = $this->receiveChannel->getIterator();
         $this->sendReady = $this->sendChannel->getIterator();
 
         $this->logger = $logger ?? new NullLogger();

@@ -234,9 +234,7 @@ class Connection implements \IteratorAggregate
                     case Frame::WINDOW_UPDATE:
                         $state->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
 
-                        while ($state->sendWindow > 0 && $state->sendChannel->isReadyForSend()) {
-                            $state->sendChannel->send(null);
-                        }
+                        while ($state->sendWindow > 0 && null !== $state->sendChannelGroup->send(null));
                         break;
                     case Frame::PING:
                         if ($frame->flags & Frame::ACK) {

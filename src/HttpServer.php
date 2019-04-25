@@ -27,6 +27,8 @@ use Psr\Log\NullLogger;
 
 class HttpServer extends HttpCodec
 {
+    public const STREAM_HEADER_NAME = 'X-Stream-Body';
+    
     protected $requestFactory;
     
     protected $responseFactory;
@@ -231,7 +233,25 @@ class HttpServer extends HttpCodec
             if ($body->isSeekable()) {
                 $body->rewind();
             }
-            
+
+            // Stream server-sent events without buffering.
+            if ($response->getHeaderLine(self::STREAM_HEADER_NAME) != '') {
+                $response = $response->withoutHeader(self::STREAM_HEADER_NAME);
+                $close = true;
+                
+                $this->writeHeader($socket, $response, '', $close, -2, true, true);
+
+                while (!$body->eof()) {
+                    $chunk = $body->read(8192);
+
+                    if ($chunk !== '') {
+                        $socket->write($chunk);
+                    }
+                }
+
+                return;
+            }
+                         
             $eof = false;
             $chunk = self::readBufferedChunk($body, 0x8000, $eof);
 
@@ -289,16 +309,15 @@ class HttpServer extends HttpCodec
             }
         }
         
-        if ($len < 0) {
+        if ($len == -1) {
             if ($response->getProtocolVersion() != '1.0') {
                 $response = $response->withHeader('Transfer-Encoding', 'chunked');
             }
-        } else {
+        } else if ($len >= 0) {
             $response = $response->withHeader('Content-Length', (string) $len);
         }
 
         $reason = \trim($response->getReasonPhrase());
-
         $buffer = \sprintf("HTTP/%s %u%s\r\n", $response->getProtocolVersion(), $response->getStatusCode(), \rtrim(' ' . $reason));
 
         foreach ($response->getHeaders() as $k => $values) {

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SSE Demo</title>
+<script>
+	window.onload = function() {
+		var events = new EventSource('https://localhost:8080/stream');
+
+		events.onerror = function() {
+			events.close();
+		};
+
+		events.onmessage = function(m) {
+			console.info(m);
+
+			var li = document.createElement('li');
+			li.appendChild(document.createTextNode(m.data));
+
+			document.getElementById('sse-events').appendChild(li);
+		};
+	};
+</script>
+</head>
+<body>
+	<h1>SSE Demo</h1>
+	<h3>Received Events</h3>
+	<ul id="sse-events"></ul>
+</body>
+</html>

@@ -16,6 +16,7 @@ use Concurrent\SignalWatcher;
 use Concurrent\Timer;
 use Concurrent\Http\HttpServer;
 use Concurrent\Http\HttpServerConfig;
+use Concurrent\Http\StreamAdapter;
 use Concurrent\Http\Http2\Http2Driver;
 use Concurrent\Network\TcpServer;
 use Monolog\Logger;
@@ -61,6 +62,39 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
 
         if ($path == '/favicon.ico') {
             return $this->factory->createResponse(404);
+        }
+
+        if ($path == '/sse') {
+            $response = $this->factory->createResponse();
+            $response = $response->withHeader('Content-Type', 'text/html');
+            $response = $response->withBody($this->factory->createStream(file_get_contents(__DIR__ . '/sse.html')));
+
+            return $response;
+        }
+
+        if ($path == '/stream') {
+            $response = $this->factory->createResponse();
+            $response = $response->withHeader('Content-Type', 'text/event-stream');
+            $response = $response->withHeader('Cache-Control', 'no-cache');
+            $response = $response->withHeader('X-Stream-Body', 'yes');
+
+            $response = $response->withBody(new class() extends StreamAdapter {
+
+                protected $count = 0;
+
+                protected function readNextChunk(): string
+                {
+                    if (++$this->count > random_int(3, 7)) {
+                        return '';
+                    }
+
+                    (new Timer(600))->awaitTimeout();
+
+                    return sprintf("data: FOO #%d\n\n", $this->count);
+                }
+            });
+
+            return $response;
         }
 
         $response = $this->factory->createResponse();

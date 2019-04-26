@@ -13,11 +13,13 @@ declare(strict_types = 1);
 
 use Concurrent\Deferred;
 use Concurrent\SignalWatcher;
+use Concurrent\Task;
 use Concurrent\Timer;
 use Concurrent\Http\HttpServer;
 use Concurrent\Http\HttpServerConfig;
-use Concurrent\Http\StreamAdapter;
-use Concurrent\Http\Http2\Http2Driver;
+use Concurrent\Http\Event\Event;
+use Concurrent\Http\Event\EventServer;
+use Concurrent\Http\Event\EventServerClient;
 use Concurrent\Network\TcpServer;
 use Monolog\Logger;
 use Monolog\Processor\PsrLogMessageProcessor;
@@ -43,11 +45,35 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
     protected $factory;
 
     protected $logger;
+    
+    protected $events;
+    
+    protected $sse;
 
     public function __construct(Psr17Factory $factory, LoggerInterface $logger)
     {
         $this->factory = $factory;
         $this->logger = $logger;
+
+        $this->sse = file_get_contents(__DIR__ . '/sse.html');
+        $this->events = new EventServer($factory);
+
+        Task::async(function () {
+            $timer = new Timer(500);
+            $count = 0;
+
+            try {
+                while (true) {
+                    $timer->awaitTimeout();
+
+                    $this->events->broadcast(new Event(sprintf('Hello #%u', ++$count)));
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to broadcast event', [
+                    'exception' => $e
+                ]);
+            }
+        });
     }
 
     public function handle(ServerRequestInterface $request): ResponseInterface
@@ -67,40 +93,39 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
         if ($path == '/sse') {
             $response = $this->factory->createResponse();
             $response = $response->withHeader('Content-Type', 'text/html');
-            $response = $response->withBody($this->factory->createStream(file_get_contents(__DIR__ . '/sse.html')));
+            $response = $response->withBody($this->factory->createStream(strtr($this->sse, [
+                '###URL###' => '/stream'
+            ])));
 
             return $response;
         }
 
         if ($path == '/stream') {
-            $response = $this->factory->createResponse();
-            $response = $response->withHeader('Content-Type', 'text/event-stream');
-            $response = $response->withHeader('Cache-Control', 'no-cache');
-            $response = $response->withHeader(HttpServer::STREAM_HEADER_NAME, 'yes');
-
-            $response = $response->withBody(new class() extends StreamAdapter {
-
-                protected $count = 0;
-
-                protected function readNextChunk(): string
-                {
-                    if (++$this->count > random_int(3, 7)) {
-                        return '';
-                    }
-
-                    (new Timer(600))->awaitTimeout();
-
-                    return sprintf("data: FOO #%d\n\n", $this->count);
-                }
+            $client = $this->events->connect(function (EventServerClient $client) {
+                $this->events->broadcast(new Event([
+                    'type' => 'DISCONNECT',
+                    'id' => $client->getId()
+                ], 'presence'));
             });
 
-            return $response;
+            $id = $client->getId();
+
+            $client->send(new Event('Welcome client ' . $id));
+
+            $this->events->broadcast(new Event([
+                'type' => 'CONNECT',
+                'id' => $id
+            ], 'presence'), [
+                $id => true
+            ]);
+
+            return $this->events->createResponse($client);
         }
 
         $response = $this->factory->createResponse();
         $response = $response->withHeader('Content-Type', 'application/json');
 
-        return $response->withBody($this->factory->createStream(\json_encode([
+        return $response->withBody($this->factory->createStream(json_encode([
             'controller' => __FILE__,
             'method' => $request->getMethod(),
             'path' => $request->getUri()->getPath(),
@@ -118,12 +143,14 @@ $wait = function () {
 };
 
 $config = new HttpServerConfig($factory, $factory);
-$config = $config->withHttp2Driver(new Http2Driver([], $logger));
+// $config = $config->withHttp2Driver(new Http2Driver([], $logger));
 
 $server = new HttpServer($config, $logger);
 
-$tls = $server->createEncryption();
-$tls = $tls->withDefaultCertificate(__DIR__ . '/cert/localhost.pem', null, 'localhost');
+$tls = null;
+
+// $tls = $server->createEncryption();
+// $tls = $tls->withDefaultCertificate(__DIR__ . '/cert/localhost.pem', null, 'localhost');
 
 $tcp = TcpServer::listen('127.0.0.1', 8080, $tls);
 

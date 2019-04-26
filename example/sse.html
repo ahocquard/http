@@ -5,19 +5,39 @@
 <title>SSE Demo</title>
 <script>
 	window.onload = function() {
-		var events = new EventSource('https://localhost:8080/stream');
+		var events = new EventSource('###URL###');
+		var list = document.getElementById('sse-events');
 
 		events.onerror = function() {
 			events.close();
 		};
 
-		events.onmessage = function(m) {
-			console.info(m);
+		events.addEventListener('presence', function(m) {
+			var event = JSON.parse(m.data);
 
+			var b = document.createElement('b');
+			b.appendChild(document.createTextNode(event.type));
+
+			var li = document.createElement('li');
+			li.appendChild(b);
+			li.appendChild(document.createTextNode(' ' + event.id));
+
+			if (list.childElementCount > 15) {
+				list.removeChild(list.lastChild);
+			}
+
+			list.insertBefore(li, list.firstChild);
+		});
+
+		events.onmessage = function(m) {
 			var li = document.createElement('li');
 			li.appendChild(document.createTextNode(m.data));
 
-			document.getElementById('sse-events').appendChild(li);
+			if (list.childElementCount > 15) {
+				list.removeChild(list.lastChild);
+			}
+
+			list.insertBefore(li, list.firstChild);
 		};
 	};
 </script>

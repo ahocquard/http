@@ -16,6 +16,8 @@ namespace Concurrent\Http;
 class IteratorStream extends StreamAdapter
 {
     protected $it;
+    
+    protected $primed = false;
 
     public function __construct(\Iterator $it)
     {
@@ -56,15 +58,24 @@ class IteratorStream extends StreamAdapter
 
     protected function readNextChunk(): string
     {
-        while ($this->it->valid()) {
-            $chunk = $this->it->current();
-            $this->it->next();
+        $val = '';
 
-            if ($chunk !== '') {
-                return $chunk;
+        do {
+            if ($this->primed) {
+                $this->it->next();
+            } else {
+                $this->primed = true;
             }
-        }
 
-        return '';
+            if (!$this->it->valid()) {
+                break;
+            }
+
+            if ('' !== ($val = $this->it->current())) {
+                break;
+            }
+        } while (true);
+
+        return $val;
     }
 }

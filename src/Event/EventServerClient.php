@@ -13,9 +13,8 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http\Event;
 
-use Concurrent\Channel;
-use Concurrent\ChannelGroup;
 use Concurrent\Http\StreamAdapter;
+use Concurrent\Sync\Condition;
 
 class EventServerClient extends StreamAdapter
 {
@@ -23,28 +22,22 @@ class EventServerClient extends StreamAdapter
 
     protected $state;
 
-    protected $channel;
+    protected $condition;
 
-    protected $group;
+    protected $buffer = '';
 
-    protected $it;
+    protected $bufferSize;
 
-    protected $primed = false;
-    
     protected $callback;
 
-    public function __construct(EventServerState $state, string $id, int $bufferSize = 64, ?callable $disconnect = null)
+    public function __construct(EventServerState $state, string $id, int $bufferSize, ?callable $disconnect)
     {
         $this->id = $id;
         $this->state = $state;
+        $this->bufferSize = $bufferSize;
         $this->callback = $disconnect;
-
-        $this->channel = new Channel($bufferSize);
-        $this->it = $this->channel->getIterator();
-
-        $this->group = new ChannelGroup([
-            $this->channel
-        ], 0);
+        
+        $this->condition = new Condition();
     }
 
     public function getId(): string
@@ -55,47 +48,59 @@ class EventServerClient extends StreamAdapter
     public function close(?\Throwable $e = null)
     {
         unset($this->state->clients[$this->id]);
-
+        
         $this->buffer = null;
-        $this->channel->close($e);
-
+        $this->condition->close($e);
+        
         if ($this->callback) {
             ($this->callback)($this);
         }
     }
 
-    public function send(Event $event, bool $block = true): void
+    public function send(Event $event): void
     {
-        if ($block) {
-            $this->channel->send((string) $event);
-        } else {
-            if (null === $this->group->send((string) $event)) {
-                $this->close($e = new \Error('Disconnected slow client'));
-
-                throw $e;
-            }
+        $this->buffer .= (string) $event;
+        $this->condition->signal();
+        
+        if ($this->buffer !== null && \strlen($this->buffer) > $this->bufferSize) {
+            $this->close($e = new \Error('Disconnected slow client'));
+            
+            throw $e;
         }
     }
 
     public function append(string $event)
     {
-        if (null === $this->group->send($event)) {
+        $this->buffer .= $event;
+        $this->condition->signal();
+        
+        if ($this->buffer !== null && \strlen($this->buffer) > $this->bufferSize) {
             $this->close(new \Error('Disconnected slow client'));
         }
     }
 
     protected function readNextChunk(): string
     {
-        if ($this->primed) {
-            $this->it->next();
-        } else {
-            $this->primed = true;
+        while ($this->buffer === '') {
+            $this->condition->wait();
         }
-
-        if (!$this->it->valid()) {
+        
+        if ($this->buffer === null) {
             return '';
         }
-
-        return $this->it->current();
+        
+        if (\strlen($this->buffer) <= 8192) {
+            try {
+                return $this->buffer;
+            } finally {
+                $this->buffer = '';
+            }
+        }
+        
+        try {
+            return \substr($this->buffer, 0, 8192);
+        } finally {
+            $this->buffer = \substr($this->buffer, 8192);
+        }
     }
 }

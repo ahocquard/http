@@ -19,7 +19,7 @@ class EventServerState
 
     public $bufferSize;
 
-    public function __construct(int $bufferSize = 64)
+    public function __construct(int $bufferSize = 0xFFFF)
     {
         $this->bufferSize = $bufferSize;
     }

@@ -13,7 +13,6 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http\Event;
 
-use Concurrent\ChannelClosedException;
 use Concurrent\Http\HttpServer;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -51,31 +50,23 @@ class EventServer
         $response = $response->withHeader('Content-Type', 'text/event-stream');
         $response = $response->withHeader('Cache-Control', 'no-cache');
         $response = $response->withHeader(HttpServer::STREAM_HEADER_NAME, '1');
-
+        
         return $response->withBody($client);
     }
 
     public function broadcast(Event $event, ?array $exclude = null): void
     {
         $data = (string) $event;
-
+        
         if ($exclude) {
             foreach ($this->state->clients as $id => $client) {
                 if (empty($exclude[$id])) {
-                    try {
-                        $client->append($data);
-                    } catch (ChannelClosedException $e) {
-                        // Client disconnected during broadcast loop.
-                    }
+                    $client->append($data);
                 }
             }
         } else {
             foreach ($this->state->clients as $client) {
-                try {
-                    $client->append($data);
-                } catch (ChannelClosedException $e) {
-                    // Client disconnected during broadcast loop.
-                }
+                $client->append($data);
             }
         }
     }
